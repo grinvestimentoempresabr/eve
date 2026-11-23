@@ -52,13 +52,15 @@ describe("applyWorkflowTransform", () => {
     new Function(
       "registerStepFunction",
       "withWorkflowStepAuthorization",
-      "installWorkflowHost",
+      "installWorkflowEngine",
       "builtInPlatform",
+      "builtInHosts",
       executable,
     )(
       (id: string, execute: Function) => registered.set(id, execute),
       withWorkflowStepAuthorization,
       () => installs++,
+      () => ({}),
       () => ({}),
     );
     expect(installs).toBe(1);
@@ -75,7 +77,7 @@ describe("applyWorkflowTransform", () => {
 
     const workflow = await applyWorkflowTransform(filename, source, "workflow");
     expect(workflow.code).not.toContain("workflowToolStep");
-    expect(workflow.code).not.toContain("installWorkflowHost");
+    expect(workflow.code).not.toContain("installWorkflowEngine");
     for (const name of registered.keys()) {
       expect(workflow.code).toContain(
         `globalThis[Symbol.for("WORKFLOW_USE_STEP")](${JSON.stringify(name)})`,
