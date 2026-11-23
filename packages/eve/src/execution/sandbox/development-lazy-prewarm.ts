@@ -1,3 +1,4 @@
+import { currentApp } from "#context/app.js";
 import { randomUUID } from "node:crypto";
 import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
@@ -42,6 +43,7 @@ export async function ensureDevelopmentSandboxesPrepared(input: {
     if ((await loadSandboxPreparedArtifact(input)) !== undefined) return;
     await prewarmAppSandboxes({
       appRoot: source.sandboxAppRoot ?? source.appRoot,
+      build: currentApp().platform.build,
       compiledArtifactsSource: source,
       log: (message) => console.info(message),
     });

@@ -92,6 +92,7 @@ beforeEach(() => {
   apiContext.setGlobalContextManager(new AsyncLocalStorageContextManager().enable());
   apiTrace.setGlobalTracerProvider(provider);
   registerInstrumentationRuntime({
+    environment: "production",
     forceFlush: async () => {
       await processor.forceFlush();
       processor.releaseCompletedTraces();

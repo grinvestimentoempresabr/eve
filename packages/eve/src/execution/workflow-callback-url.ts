@@ -1,4 +1,3 @@
-import { builtInPlatform } from "#platform/context.js";
 import type { Entities } from "#platform/entities.js";
 import { joinEveRoutePath } from "#shared/eve-route-path.js";
 import {
@@ -18,10 +17,7 @@ export function resolveVercelProductionCallbackBaseUrl(platform: Entities): stri
   return null;
 }
 
-export function resolveWorkflowCallbackBaseUrl(
-  metadataUrl: string,
-  platform: Entities = builtInPlatform(),
-): string {
+export function resolveWorkflowCallbackBaseUrl(metadataUrl: string, platform: Entities): string {
   const configuredLocalBaseUrl = readEnv(WORKFLOW_LOCAL_BASE_URL_ENV)?.trim();
   const localBaseUrl = configuredLocalBaseUrl ? configuredLocalBaseUrl : undefined;
   const resolved = resolveVercelProductionCallbackBaseUrl(platform) ?? localBaseUrl ?? metadataUrl;
