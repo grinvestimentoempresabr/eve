@@ -1,12 +1,34 @@
-import { ContextKey, type ContextAccessor, type ContextReader } from "#context/key.js";
+import { ContextContainer, contextStorage } from "#context/container.js";
+import type { ContextAccessor, ContextReader } from "#context/key.js";
+import { AppKey } from "#context/keys.js";
 import type { App } from "#runtime/app.js";
 
-export const AppKey = new ContextKey<App>("eve.app");
+export { AppKey } from "#context/keys.js";
 
 export function appOf(ctx: ContextReader | undefined): App | undefined {
   return ctx?.get(AppKey);
 }
 
-export function bindApp(ctx: ContextAccessor, app: App | undefined): void {
-  if (app !== undefined) ctx.set(AppKey, app);
+export function currentApp(): App {
+  return requireApp(contextStorage.getStore());
+}
+
+export function requireApp(ctx: ContextReader | undefined): App {
+  const app = appOf(ctx);
+  if (app === undefined) {
+    throw new Error(
+      "eve read the app outside of a request, a turn, or a step. Call this code from a channel handler, a tool, a hook, or a step that eve runs, or pass the app to it.",
+    );
+  }
+  return app;
+}
+
+export function bindApp(ctx: ContextAccessor, app: App): void {
+  ctx.set(AppKey, app);
+}
+
+export function runInApp<T>(app: App, fn: () => T): T {
+  const ctx = new ContextContainer();
+  bindApp(ctx, app);
+  return contextStorage.run(ctx, fn);
 }

@@ -18,8 +18,7 @@ import {
   AuthorizationHookKey,
   CallbackBaseUrlKey,
 } from "#harness/authorization.js";
-import { platformOf } from "#platform/context.js";
-import { processApp } from "#runtime/app.js";
+import { startedApp } from "#runtime/app.js";
 import { createAuthorizationContext } from "#runtime/authorization-context.js";
 import { buildBaseToolContext } from "#context/build-base-tool-context.js";
 import { createToolChannelTo } from "#execution/tools/channel-to.js";
@@ -41,14 +40,14 @@ export function withWorkflowStepAuthorization(execute: (...args: never[]) => unk
   ): Promise<unknown> {
     const { args, context: input } = invocation;
     getStepMetadata();
-    const app = processApp().started;
+    const app = startedApp();
     const context = new ContextContainer();
     bindApp(context, app);
     context.set(AuthKey, input.session.auth.current);
     context.set(InitiatorAuthKey, input.session.auth.initiator);
     context.set(SessionIdKey, input.session.id);
     context.setVirtualContext(SessionKey, { ...input.session, sessionId: input.session.id });
-    context.set(CallbackBaseUrlKey, resolveWorkflowCallbackBaseUrl(input.baseUrl, platformOf(app)));
+    context.set(CallbackBaseUrlKey, resolveWorkflowCallbackBaseUrl(input.baseUrl, app.platform));
     context.setVirtualContext(AuthorizationHookKey, input.token);
     context.setVirtualContext(PendingAuthorizationResultKey, input.authorizationResults);
 

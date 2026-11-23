@@ -107,6 +107,7 @@ let provider: BasicTracerProvider;
 
 function useTracing(tracePolicy?: TraceCapturePolicy): void {
   registerInstrumentationRuntime({
+    environment: "development",
     forceFlush: async () => undefined,
     hooks: createInstrumentationHooks([]),
     otelSettings: {
@@ -349,6 +350,7 @@ describe("invokeTool trace policy", () => {
 
   it("keeps a failing tool's text off an existing parent span with tracing undeclared", async () => {
     registerInstrumentationRuntime({
+      environment: "development",
       forceFlush: async () => undefined,
       hooks: createInstrumentationHooks([]),
       otelSettings: undefined,

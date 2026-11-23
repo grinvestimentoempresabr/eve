@@ -28,6 +28,9 @@ import {
 } from "#runtime/compiled-artifacts-source.js";
 import type { RuntimeSandboxRegistry } from "#runtime/sandbox/registry.js";
 import { defineSandboxProvider } from "#sandbox/provider.js";
+import { startTestApp } from "#internal/testing/test-platform.js";
+
+startTestApp();
 
 const durable = vi.hoisted(() => ({
   attempt: 1,
