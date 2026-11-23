@@ -86,6 +86,51 @@ describe("defineEvalConfig", () => {
     expect(defineEvalConfig({ judge: {} }).judge).toEqual({});
   });
 
+  it("accepts each targetAuth scheme with a string or function token", () => {
+    const token = () => "fresh-token";
+    for (const targetAuth of [
+      { bearer: token },
+      { basic: { username: "eve", password: "secret" } },
+      { vercelOidc: { token } },
+    ]) {
+      expect(defineEvalConfig({ targetAuth }).targetAuth).toBe(targetAuth);
+    }
+  });
+
+  it("accepts exact HTTPS origins with or without a non-default port", () => {
+    const origins = ["https://eval.example.test", "https://preview.example.test:8443"];
+    expect(defineEvalConfig({ targetAuthOrigins: origins }).targetAuthOrigins).toEqual(origins);
+  });
+
+  it("rejects targetAuthOrigins entries that are not exact HTTPS origins", () => {
+    for (const targetAuthOrigins of [
+      "https://eval.example.test",
+      ["http://eval.example.test"],
+      ["https://*.example.test"],
+      ["https://eval.example.test/prefix"],
+    ]) {
+      expect(() => defineInvalidConfig({ targetAuthOrigins: targetAuthOrigins as never })).toThrow(
+        "`targetAuthOrigins` must be an array of exact HTTPS origins",
+      );
+    }
+  });
+
+  it("rejects a targetAuth without exactly one usable scheme", () => {
+    for (const targetAuth of [
+      null,
+      {},
+      { bearer: "a", vercelOidc: { token: "b" } },
+      { bearer: "a", vercelOidc: undefined },
+      { bearer: undefined },
+      { basic: { password: "secret" } },
+      { vercelOidc: null },
+    ]) {
+      expect(() => defineInvalidConfig({ targetAuth: targetAuth as never })).toThrow(
+        "`targetAuth` must set exactly one of",
+      );
+    }
+  });
+
   it("rejects a non-positive maxConcurrency", () => {
     expect(() => defineInvalidConfig({ maxConcurrency: 0 })).toThrow(
       "`maxConcurrency` must be a positive integer",

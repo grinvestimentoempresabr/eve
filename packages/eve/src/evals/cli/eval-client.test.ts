@@ -24,6 +24,8 @@ const VERIFIED_TARGET = await resolveTestVercelTarget({
 
 describe("resolveEvalClientOptions", () => {
   beforeEach(() => {
+    vi.stubEnv("EVE_EVAL_AUTH_TOKEN", "");
+    vi.stubEnv("EVE_EVAL_OIDC_TOKEN", "");
     vi.mocked(readFile).mockRejectedValue(new Error("ENOENT"));
   });
 
@@ -75,6 +77,91 @@ describe("resolveEvalClientOptions", () => {
     expect(() =>
       resolveEvalClientOptions({ kind: "remote", url: "https://example.vercel.app" }),
     ).toThrow("Set either EVE_EVAL_AUTH_TOKEN or EVE_EVAL_OIDC_TOKEN, not both");
+  });
+
+  it("resolves a targetAuth token before every local request", async () => {
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockImplementation(async () =>
+        Response.json({ ok: true, status: "ready", workflowId: "wf" }),
+      );
+    let calls = 0;
+    const client = await createEvalClient(
+      { kind: "local", url: "http://127.0.0.1:3000" },
+      { targetAuth: { bearer: async () => `token-${++calls}` } },
+    );
+
+    await client.health();
+    await client.health();
+
+    const [first, second] = fetchMock.mock.calls.map(([, init]) => init);
+    expect(new Headers(first?.headers).get("authorization")).toBe("Bearer token-1");
+    expect(new Headers(second?.headers).get("authorization")).toBe("Bearer token-2");
+    expect(first?.redirect).toBe("manual");
+  });
+
+  it.each([
+    { url: "https://eval.example.test", allowed: undefined },
+    { url: "https://other.eval.example.test", allowed: ["https://eval.example.test"] },
+    { url: "https://eval.example.test:8443", allowed: ["https://eval.example.test"] },
+    { url: "http://eval.example.test", allowed: ["https://eval.example.test"] },
+  ])("rejects $url without exact HTTPS approval in $allowed", async ({ url, allowed }) => {
+    const bearer = vi.fn(() => "fixture-token");
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockRejectedValue(new Error("Unexpected fetch"));
+
+    await expect(
+      createEvalClient(
+        { kind: "remote", url },
+        { targetAuth: { bearer }, targetAuthOrigins: allowed },
+      ),
+    ).rejects.toThrow("targetAuthOrigins");
+    expect(bearer).not.toHaveBeenCalled();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("refreshes targetAuth per request to an approved HTTPS origin without following redirects", async () => {
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(Response.json({ ok: true, status: "ready", workflowId: "wf" }))
+      .mockResolvedValueOnce(Response.json({ ok: true, status: "ready", workflowId: "wf" }));
+    const bearer = vi.fn().mockReturnValueOnce("first-token").mockReturnValueOnce("second-token");
+    const client = await createEvalClient(
+      { kind: "remote", url: "https://eval.example.test:8443/prefix" },
+      {
+        targetAuth: { bearer },
+        targetAuthOrigins: ["https://other.example.test", "https://eval.example.test:8443"],
+      },
+    );
+
+    expect(bearer).not.toHaveBeenCalled();
+    await client.health();
+    await client.health();
+
+    expect(
+      fetchMock.mock.calls.map(([url, init]) => [
+        url,
+        new Headers(init?.headers).get("authorization"),
+        init?.redirect,
+      ]),
+    ).toEqual([
+      ["https://eval.example.test:8443/prefix/eve/v1/health", "Bearer first-token", "manual"],
+      ["https://eval.example.test:8443/prefix/eve/v1/health", "Bearer second-token", "manual"],
+    ]);
+  });
+
+  it.each([
+    ["EVE_EVAL_AUTH_TOKEN", { bearer: "override-token" }],
+    ["EVE_EVAL_OIDC_TOKEN", { vercelOidc: { token: "override-token" } }],
+  ])("lets %s override workspace targetAuth without an allowlist", (env, auth) => {
+    vi.stubEnv(env, "override-token");
+    expect(
+      resolveEvalClientOptions(
+        { kind: "remote", url: "https://eval.example.test" },
+        { targetAuth: { bearer: () => "fixture-token" } },
+      ),
+    ).toMatchObject({ auth, redirect: "manual" });
   });
 
   it("ignores a blank EVE_EVAL_AUTH_TOKEN", () => {

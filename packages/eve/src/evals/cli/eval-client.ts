@@ -7,13 +7,18 @@ import {
   type VerifiedRemoteDevelopmentClientDeps,
 } from "#setup/verified-remote-client.js";
 
-import type { EveEvalTargetHandle } from "#evals/types.js";
+import type { EveEvalConfigInput, EveEvalTargetHandle } from "#evals/types.js";
+
+type EvalTargetAuthConfig = Pick<EveEvalConfigInput, "targetAuth" | "targetAuthOrigins">;
 
 export function resolveEvalClientOptions(
   target: Pick<EveEvalTargetHandle, "kind" | "url">,
+  { targetAuth, targetAuthOrigins }: EvalTargetAuthConfig = {},
 ): ClientOptions {
   if (target.kind === "local") {
-    return { baseUrl: target.url };
+    return targetAuth === undefined
+      ? { baseUrl: target.url }
+      : { baseUrl: target.url, auth: targetAuth, redirect: "manual" };
   }
 
   const options = resolveDevelopmentClientOptions(target.url);
@@ -31,10 +36,24 @@ export function resolveEvalClientOptions(
     return { ...options, auth: { vercelOidc: { token: oidcToken } }, redirect: "manual" };
   }
 
-  return options;
+  if (targetAuth === undefined) return options;
+
+  const url = URL.parse(target.url);
+  if (
+    url?.protocol !== "https:" ||
+    url.username !== "" ||
+    url.password !== "" ||
+    !Array.isArray(targetAuthOrigins) ||
+    !targetAuthOrigins.includes(url.origin)
+  ) {
+    throw new Error(
+      "Refusing to send workspace targetAuth to this --url. Use an HTTPS URL without embedded credentials and list its exact origin (including any non-default port) in targetAuthOrigins in evals/evals.config.ts.",
+    );
+  }
+  return { ...options, baseUrl: url.href, auth: targetAuth, redirect: "manual" };
 }
 
-interface CreateEvalClientOptions {
+interface CreateEvalClientOptions extends EvalTargetAuthConfig {
   readonly workspaceRoot?: string;
   readonly deps?: Partial<VerifiedRemoteDevelopmentClientDeps>;
 }
@@ -43,7 +62,7 @@ export async function createEvalClient(
   target: Pick<EveEvalTargetHandle, "kind" | "url">,
   options: CreateEvalClientOptions = {},
 ): Promise<Client> {
-  const base = resolveEvalClientOptions(target);
+  const base = resolveEvalClientOptions(target, options);
   if (target.kind === "local" || base.auth !== undefined || options.workspaceRoot === undefined) {
     return new Client(base);
   }

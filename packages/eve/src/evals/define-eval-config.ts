@@ -7,13 +7,16 @@ import type { EveEvalConfig, EveEvalConfigInput } from "#evals/types.js";
  * Exactly one `evals.config.ts` is required. It supplies the optional default
  * `judge` model for `t.judge(...)` assertions (so individual evals need not
  * repeat it), run-level `reporters`, `maxConcurrency`, `timeoutMs`, and `repeat`
- * defaults, and optional run-wide `setup` and `teardown`. CLI flags
+ * defaults, optional run-wide `setup` and `teardown`, and the `targetAuth`
+ * credentials and their remote `targetAuthOrigins` allowlist. CLI flags
  * (`--max-concurrency`, `--timeout`, `--repeat`) and per-eval values take
  * precedence over the config defaults.
  *
  * Throws on invalid input: a non-positive or non-integer `maxConcurrency` or `repeat`,
- * a negative or non-finite `timeoutMs`, non-array `reporters`, or a
- * non-function `setup` or `teardown`.
+ * a negative or non-finite `timeoutMs`, non-array `reporters`, a
+ * non-function `setup` or `teardown`, or a `targetAuth` without exactly one of
+ * `bearer`, `basic`, or `vercelOidc` holding a string or function token. Also
+ * throws if `targetAuthOrigins` is not an array of exact HTTPS origins.
  */
 export function defineEvalConfig<TContext = undefined>(
   input: EveEvalConfigInput<TContext>,
@@ -53,4 +56,41 @@ function validateEvalConfigInput(input: EveEvalConfigInput): void {
   if (input.reporters !== undefined && !Array.isArray(input.reporters)) {
     throw new Error("Eval config `reporters` must be an array of reporters.");
   }
+
+  if (input.targetAuth !== undefined && !isTargetAuth(input.targetAuth)) {
+    throw new Error(
+      "Eval config `targetAuth` must set exactly one of `bearer`, `basic: { username, password }`, or `vercelOidc: { token }`, each token a string or a function returning one, as in `{ bearer: () => getToken() }`.",
+    );
+  }
+
+  const { targetAuthOrigins } = input;
+  if (
+    targetAuthOrigins !== undefined &&
+    (!Array.isArray(targetAuthOrigins) || !targetAuthOrigins.every(isExactHttpsOrigin))
+  ) {
+    throw new Error(
+      "Eval config `targetAuthOrigins` must be an array of exact HTTPS origins, such as `['https://agent.example.com']`, with no wildcard, path, or trailing slash.",
+    );
+  }
+}
+
+function isExactHttpsOrigin(origin: unknown): boolean {
+  if (typeof origin !== "string") return false;
+  const url = URL.parse(origin);
+  return url?.protocol === "https:" && url.origin === origin && !url.hostname.includes("*");
+}
+
+function isTargetAuth(auth: unknown): boolean {
+  if (typeof auth !== "object" || auth === null) return false;
+  const { bearer, basic, vercelOidc } = auth as {
+    readonly bearer?: unknown;
+    readonly basic?: { readonly username?: unknown; readonly password?: unknown } | null;
+    readonly vercelOidc?: { readonly token?: unknown } | null;
+  };
+  if (["bearer", "basic", "vercelOidc"].filter((scheme) => scheme in auth).length !== 1) {
+    return false;
+  }
+  if (basic !== undefined && typeof basic?.username !== "string") return false;
+  const token = bearer ?? basic?.password ?? vercelOidc?.token;
+  return typeof token === "string" || typeof token === "function";
 }
