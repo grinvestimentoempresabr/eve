@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, expectTypeOf, it, vi } from "vitest";
 import { z } from "#compiled/zod/index.js";
 import { defineDynamicSchedules } from "#public/schedules/subscription.js";
 import { inMemoryScheduleProvider } from "#public/schedules/providers/in-memory.js";
@@ -194,7 +194,90 @@ describe("dynamic schedules client", () => {
       client.update(created.name, { expression: { type: "delay", minutes: 0 } }),
     ).rejects.toThrow();
     expect(update).not.toHaveBeenCalled();
-    await expect(client.get(created.name)).resolves.toEqual(created);
+    await expect(client.get(created.name)).resolves.toEqual({
+      ...created,
+      creator: { type: "user", authenticator: "test", principalId: "alice" },
+      payload,
+    });
+  });
+
+  it("returns the payload replacement's caller as creator, and list returns neither", async () => {
+    const { definition } = setup();
+    const shared = { ...definition, scope: () => "shared" };
+    const alice = createScheduleCollectionClient(shared, callContext);
+    const bob = createScheduleCollectionClient(shared, {
+      ...callContext,
+      session: {
+        ...callContext.session,
+        auth: {
+          current: { ...callContext.session.auth.current!, principalId: "bob" },
+          initiator: null,
+        },
+      },
+    });
+    const created = await alice.create(input);
+    const replaced = { ...payload, task: "Summarize the month." };
+    await bob.update(created.name, { payload: replaced });
+    await expect(alice.get(created.name)).resolves.toMatchObject({
+      creator: { principalId: "bob" },
+      payload: replaced,
+    });
+    await alice.update(created.name, { expression: { type: "delay", minutes: 10 } });
+    await expect(alice.get(created.name)).resolves.toMatchObject({
+      creator: { principalId: "bob" },
+    });
+    const [listed] = (await alice.list()).data;
+    expect(listed).not.toHaveProperty("creator");
+    expect(listed).not.toHaveProperty("payload");
+  });
+
+  it("asks the provider for the payload on get and never on update", async () => {
+    const { provider, client } = setup();
+    const created = await client.create(input);
+    const get = vi.spyOn(provider, "get");
+    await client.get(created.name);
+    expect(get).toHaveBeenLastCalledWith(expect.anything(), created.name, { payload: true });
+    get.mockClear();
+    await client.update(created.name, { expression: { type: "delay", minutes: 10 } });
+    await client.update(created.name, { payload: { ...payload, task: "Summarize the month." } });
+    expect(get).toHaveBeenCalledTimes(2);
+    for (const call of get.mock.calls) expect(call).toHaveLength(2);
+  });
+
+  it("fails get but still updates a schedule whose stored payload doesn't parse", async () => {
+    const { provider, client } = setup();
+    const created = await client.create(input);
+    const get = provider.get.bind(provider);
+    vi.spyOn(provider, "get").mockImplementation(async (context, name, options) => {
+      const stored = await get(context, name, options);
+      return stored === null || options?.payload !== true
+        ? stored
+        : { ...stored, payload: { eve: "corrupted" } };
+    });
+    await expect(client.get(created.name)).rejects.toThrow(
+      "Invalid scheduled collection payload; recreate the schedule.",
+    );
+    await expect(
+      client.update(created.name, { expression: { type: "delay", minutes: 10 } }),
+    ).resolves.toMatchObject({ name: created.name });
+    await expect(client.update(created.name, { payload })).resolves.toMatchObject({
+      name: created.name,
+    });
+  });
+
+  it("returns the payload as preparePayload stored it, typed as the prepared shape", async () => {
+    const prepared = defineDynamicSchedules({
+      provider: inMemoryScheduleProvider(),
+      inputSchema: z.object({ task: z.string().min(1), destination: z.enum(["my-dm"]) }).strict(),
+      preparePayload: (value) => ({ version: 1 as const, instructions: value.task }),
+      auth: () => null,
+      run: async () => {},
+    });
+    const client = createScheduleCollectionClient(prepared, callContext);
+    const created = await client.create(input);
+    const detail = await client.get(created.name);
+    expectTypeOf(detail!.payload).toEqualTypeOf<{ version: 1; instructions: string }>();
+    expect(detail?.payload).toEqual({ version: 1, instructions: payload.task });
   });
 
   it("tells preparePayload the timing a write leaves the schedule with", async () => {
