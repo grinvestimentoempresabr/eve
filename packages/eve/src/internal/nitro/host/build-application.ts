@@ -78,6 +78,8 @@ function assertProfileOutputOutsideBuildOutput(
 }
 
 interface ApplicationBuildPlatform {
+  readonly conditions: readonly string[] | undefined;
+  readonly entry: string | undefined;
   readonly output: PlatformBuildOutput;
   readonly target: BuildTarget;
 }
@@ -225,9 +227,12 @@ export async function buildApplication(
   const profileOutputPath =
     options.profileOutputPath === undefined ? undefined : resolve(options.profileOutputPath);
   const profiler = profileOutputPath === undefined ? undefined : new ApplicationBuildProfiler();
+  const build = platformBuild(options.platform);
   const platform: ApplicationBuildPlatform = {
+    conditions: build.conditions,
+    entry: build.entry,
     output: platformBuildOutput(),
-    target: platformBuild().platformOutput?.() === true ? "vercel" : "node",
+    target: build.platformOutput?.() === true ? "vercel" : "node",
   };
 
   const extensionBuild = await measureBuildPhase(profiler, "extension.check", () =>
@@ -290,7 +295,9 @@ async function buildApplicationInWorkspace(
 ): Promise<BuiltApplicationOutput> {
   const isVercelBuild = platform.target === "vercel";
   const preparedHost = await measureBuildPhase(profiler, "host.prepare", () =>
-    prepareProductionApplicationHost(workspace, isVercelBuild ? "vercel" : "local"),
+    prepareProductionApplicationHost(workspace, isVercelBuild ? "vercel" : "local", {
+      deferInstrumentationSetup: platform.entry !== undefined,
+    }),
   );
 
   const servicePrefix = isVercelBuild
@@ -320,6 +327,9 @@ async function buildApplicationInWorkspace(
     {
       kind: "production",
       preset: isVercelBuild ? "vercel" : undefined,
+      entry:
+        platform.entry === undefined ? undefined : resolve(preparedHost.appRoot, platform.entry),
+      conditions: platform.conditions,
       publicRoutePrefix,
       vercelService: servicePrefix !== undefined || options.vercelServiceOutput !== undefined,
       workspaceMember: options.workspaceMember,
@@ -400,7 +410,7 @@ async function buildApplicationInWorkspace(
   }
 
   const deploymentId =
-    nitro.options.preset === "node-server"
+    nitro.options.preset === "node-server" || spec.entry !== undefined
       ? await measureBuildPhase(profiler, "id.compute", () =>
           stageBuildDeploymentId(workspace.publication.output.stagedDir),
         )
