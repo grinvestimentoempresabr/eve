@@ -1,7 +1,8 @@
-import { installWorkflowHost } from "#execution/workflow-host/host.js";
+import { installWorkflowEngine } from "#execution/workflow-host/host.js";
 import { builtInPlatform } from "#platform/context.js";
+import { builtInHosts } from "#runtime/app.js";
 
-installWorkflowHost(builtInPlatform());
+installWorkflowEngine(builtInHosts(), builtInPlatform());
 export async function __builtin_response_array_buffer(
   this: Request | Response,
 ): Promise<ArrayBuffer> {
