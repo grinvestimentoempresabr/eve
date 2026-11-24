@@ -79,6 +79,32 @@ export function connectionEntry(
   };
 }
 
+export function connectionEventActionApproval(
+  registry: ConnectionRegistry,
+  connection: ResolvedConnectionDefinition,
+  action: string,
+): Approval | undefined {
+  return connectionApproval(registry, connection, action, connection.approval);
+}
+
+export function runConnectionEventAction(
+  registry: ConnectionRegistry,
+  connection: ResolvedConnectionDefinition,
+  action: string,
+  input: unknown,
+  options: ToolExecuteOptions,
+): Promise<unknown> {
+  releaseApprovalPin(options.toolCallId, connection);
+  const actions = registry.getClient(connection.connectionName).eventActions;
+  if (actions === undefined) throw new Error("Unknown subscription for this caller.");
+  return withConnectionApproval(connection.connectionName, options.approval?.responder, () =>
+    actions.execute(action, input, {
+      abortSignal: options.abortSignal,
+      callId: options.toolCallId,
+    }),
+  );
+}
+
 export function connectionSignInEntry(
   registry: ConnectionRegistry,
   connection: ResolvedConnectionDefinition,
@@ -143,8 +169,7 @@ async function runConnectionTool(
   if ("authorization" in listing) {
     return await auth.handleError(listing.error, listing.authorization);
   }
-  const isEventAction = client.eventActions?.ownsName(toolName) === true;
-  const modelInput = withoutProvidedArguments(connection, rawInput, !isEventAction);
+  const modelInput = withoutProvidedArguments(connection, rawInput);
   const checked = await checkCall(connection, listing.tools, toolName, modelInput);
   if ("issues" in checked) throw new Error(issuesMessage(checked.issues));
   const { input, tool } = checked;
@@ -153,13 +178,6 @@ async function runConnectionTool(
   try {
     const approved = <T>(fn: () => T) =>
       withConnectionApproval(connection.connectionName, options.approval?.responder, fn);
-    if (isEventAction)
-      return await approved(() =>
-        client.eventActions!.execute(tool.name, input, {
-          abortSignal: options.abortSignal,
-          callId: options.toolCallId,
-        }),
-      );
     raw = await approved(() =>
       executeWithDeadline(connection.connectionName, client, tool.name, input, options),
     );
@@ -215,8 +233,7 @@ async function checkInput(
     if (isConnectionAuthorizationRequiredError(error)) return { value: input };
     return { issues: [{ message: listingFailureMessage(connection.connectionName, error) }] };
   }
-  const remote = client.eventActions?.ownsName(toolName) !== true;
-  const modelInput = withoutProvidedArguments(connection, input, remote);
+  const modelInput = withoutProvidedArguments(connection, input);
   const checked = await checkCall(connection, tools, toolName, modelInput);
   return "issues" in checked ? { issues: checked.issues } : { value: modelInput };
 }
@@ -228,9 +245,8 @@ type CallCheck =
 function withoutProvidedArguments(
   connection: ResolvedConnectionDefinition,
   input: unknown,
-  remote: boolean,
 ): Record<string, unknown> {
-  const provided = remote ? (connection.toolCall?.providedArguments ?? {}) : {};
+  const provided = connection.toolCall?.providedArguments ?? {};
   return Object.fromEntries(
     Object.entries(isObject(input) ? input : {}).filter(([key]) => !Object.hasOwn(provided, key)),
   );

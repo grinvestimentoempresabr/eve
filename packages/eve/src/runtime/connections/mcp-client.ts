@@ -1,4 +1,4 @@
-import { ConnectionEventActions, isEventAction } from "#runtime/subscriptions/actions.js";
+import { ConnectionEventActions } from "#runtime/subscriptions/actions.js";
 import { createMCPClient, type MCPClient } from "#compiled/@ai-sdk/mcp/index.js";
 import type { ToolSet } from "ai";
 
@@ -80,11 +80,9 @@ export class McpConnectionClient implements ConnectionClient {
         this.#forwardingFetch(),
       );
       this.eventActions = {
-        ownsName: isEventAction,
-        recoveryMetadata: () => events.recoveryMetadata(),
-        metadata: async () => {
+        list: async () => {
           try {
-            return await events.metadata();
+            return await events.list();
           } catch (error) {
             return await this.#rethrowClassified(error);
           }
