@@ -22,8 +22,6 @@ import type { SessionHistoryMessage } from "#shared/session-history.js";
 
 export type SessionStateMap = Readonly<Record<string, unknown>>;
 
-export type CompactionStage = "summary-only" | "tail" | "text-tail";
-
 export interface PromptMeasurement {
   readonly inputTokens: number;
   readonly promptMessageCount: number;
@@ -34,7 +32,7 @@ export interface CompactionState {
   readonly estimateRatio?: number;
   readonly lastKnownInputTokens?: number;
   readonly lastKnownPromptMessageCount?: number;
-  readonly lastStage?: CompactionStage;
+  readonly recentRewrite?: true;
   readonly requestEnvelopeTokens?: number;
   readonly measurementsByModel?: Readonly<Record<string, PromptMeasurement>>;
 }

@@ -1,3 +1,4 @@
+import type { CompactionStrategy } from "#shared/compaction-strategy.js";
 import { validateScheduleTimezone } from "#shared/schedule-timezone.js";
 import { isAgentReasoningDefinition } from "#internal/runtime-model.js";
 import { normalizeAgentApproval } from "#internal/authored-definition/approval.js";
@@ -127,6 +128,15 @@ export function normalizeAgentDefinition(
 
   if (record.approval !== undefined) {
     definition.approval = normalizeAgentApproval(record.approval, message);
+  }
+
+  if (
+    definition.experimental?.compaction !== undefined &&
+    definition.compaction?.model !== undefined
+  ) {
+    throw new Error(
+      `${message} "compaction.model" configures eve's default strategy, which "experimental.compaction" replaces. Pass the model to the strategy instead: defaultCompaction({ model }).`,
+    );
   }
 
   return definition as Readonly<NormalizedAgentDefinition>;
@@ -259,8 +269,17 @@ function normalizeAgentExperimentalDefinition(
   message: string,
 ): NonNullable<NormalizedAgentDefinition["experimental"]> {
   const record = expectObjectRecord(value, message);
-  expectOnlyKnownKeys(record, ["workflow"], message);
+  expectOnlyKnownKeys(record, ["compaction", "workflow"], message);
   const normalizedDefinition: Mutable<NonNullable<NormalizedAgentDefinition["experimental"]>> = {};
+
+  if (record.compaction !== undefined) {
+    if (!isCompactionStrategy(record.compaction)) {
+      throw new Error(
+        `${message} "experimental.compaction" must be a compaction strategy: a function, such as defaultCompaction() from "eve/experimental/compaction", or { compact, when }.`,
+      );
+    }
+    normalizedDefinition.compaction = record.compaction as CompactionStrategy;
+  }
 
   if (record.workflow !== undefined) {
     normalizedDefinition.workflow = normalizeAgentWorkflowDefinition(record.workflow, message);
@@ -477,4 +496,24 @@ export function normalizeScheduleDefinition(value: unknown, message: string): Sc
   }
 
   return definition as ScheduleDefinition;
+}
+
+const COMPACTION_EVENTS: ReadonlySet<string> = new Set([
+  "model.requested",
+  "model.retried",
+  "turn.settled",
+]);
+
+function isCompactionStrategy(value: unknown): value is CompactionStrategy {
+  if (typeof value === "function") return true;
+  if (typeof value !== "object" || value === null) return false;
+  const { compact, when } = value as { readonly compact?: unknown; readonly when?: unknown };
+  if (typeof compact !== "function") return false;
+  if (when === undefined) return true;
+  if (typeof when !== "object" || when === null || Array.isArray(when)) return false;
+  return Object.entries(when).every(
+    ([event, trigger]) =>
+      COMPACTION_EVENTS.has(event) &&
+      (trigger === undefined || trigger === true || typeof trigger === "function"),
+  );
 }

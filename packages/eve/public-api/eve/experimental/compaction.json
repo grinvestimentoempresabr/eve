@@ -1,0 +1,13 @@
+[
+  "CompactionContext",
+  "CompactionEvent",
+  "CompactionMeasure",
+  "CompactionOverflowError",
+  "CompactionReason",
+  "CompactionStrategy",
+  "CompactionTrigger",
+  "StoredHistoryMessage",
+  "defaultCompaction",
+  "openaiCompaction",
+  "withoutInjected"
+]
