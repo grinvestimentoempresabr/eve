@@ -148,6 +148,70 @@ describe("normalizeAgentDefinition", () => {
     ).toThrow('Rename "compaction.thresholdPercent" to "compaction.threshold"');
   });
 
+  it("keeps an experimental compaction strategy with its trigger, and rejects what isn't one", () => {
+    const strategy = {
+      compact: () => undefined,
+      when: { "model.requested": true, "turn.settled": () => true },
+    };
+    expect(
+      normalizeAgentDefinition(
+        { model: "openai/gpt-5.4", experimental: { compaction: strategy } },
+        FAILURE_MESSAGE,
+      ).experimental,
+    ).toEqual({ compaction: strategy });
+    const fn = () => undefined;
+    expect(
+      normalizeAgentDefinition(
+        { model: "openai/gpt-5.4", experimental: { compaction: fn } },
+        FAILURE_MESSAGE,
+      ).experimental,
+    ).toEqual({ compaction: fn });
+    for (const compaction of [
+      "defaultCompaction",
+      { compact: () => undefined, when: { overflow: true } },
+      { when: { "model.requested": true } },
+    ]) {
+      expect(() =>
+        normalizeAgentDefinition(
+          { model: "openai/gpt-5.4", experimental: { compaction } },
+          FAILURE_MESSAGE,
+        ),
+      ).toThrow('"experimental.compaction" must be a compaction strategy');
+    }
+  });
+
+  it("rejects a strategy set under the stable compaction key", () => {
+    expect(() =>
+      normalizeAgentDefinition(
+        { model: "openai/gpt-5.4", compaction: { compact: () => undefined } },
+        FAILURE_MESSAGE,
+      ),
+    ).toThrow(/Unknown key "compact"/);
+  });
+
+  it("sends the summary model to the strategy when a strategy replaces the default", () => {
+    expect(() =>
+      normalizeAgentDefinition(
+        {
+          model: "openai/gpt-5.4",
+          compaction: { model: "openai/gpt-5-mini" },
+          experimental: { compaction: () => undefined },
+        },
+        FAILURE_MESSAGE,
+      ),
+    ).toThrow("defaultCompaction({ model })");
+    expect(
+      normalizeAgentDefinition(
+        {
+          model: "openai/gpt-5.4",
+          compaction: { threshold: 0.8 },
+          experimental: { compaction: () => undefined },
+        },
+        FAILURE_MESSAGE,
+      ).compaction,
+    ).toEqual({ threshold: 0.8 });
+  });
+
   it("accepts agent limits and keeps the session usage function", () => {
     const sessionUsage = ({ window }: { window: { inputTokens: number } }) =>
       window.inputTokens >= 1_000;

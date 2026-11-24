@@ -2,7 +2,8 @@ import { describe, expect, it } from "vitest";
 
 import { ContextContainer } from "#context/container.js";
 import { compactionConfig } from "#harness/compaction/config.js";
-import { shouldCompact, withPromptMeasurement } from "#harness/compaction/engine.js";
+import { withPromptMeasurement } from "#harness/compaction/engine.js";
+import { shouldCompact } from "#internal/testing/compaction-trigger.js";
 import type { CompactionState } from "#harness/types.js";
 import { fromCompiledBundle } from "#definitions/compiled-agent.js";
 import { SessionAgentKey } from "#runtime/sessions/runtime-context-keys.js";

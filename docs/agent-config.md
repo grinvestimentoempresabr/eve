@@ -291,6 +291,150 @@ export default defineAgent({
 
 See [Default harness](./concepts/default-harness#compaction) for how the loop applies it.
 
+### Experimental compaction strategies
+
+`experimental.compaction` replaces how eve compacts the history. The API is experimental: it can
+change in a minor release. eve compacts before a model call whose request is over the threshold
+(`reason: "automatic"`), when a client calls `session.compact()` (`reason: "manual"`), and when the
+provider rejects a request as longer than the model's context window (`reason: "overflow"`). The
+strategy receives the stored history and returns the history to keep:
+
+```ts title="agent/agent.ts"
+import { defineAgent } from "eve";
+import { type CompactionStrategy } from "eve/experimental/compaction";
+
+/** Summarizes every turn before the latest user message, which it keeps word for word. */
+const keepLatestTurn: CompactionStrategy = async (history, ctx) => {
+  const latest = history.findLastIndex((m) => m.role === "user" && m.kind === "user");
+  const { text } = await ctx.call({
+    messages: [
+      ...history.slice(0, latest),
+      { role: "user", kind: "context.compaction", content: "Summarize the conversation above." },
+    ],
+    system: "Keep every ticket ID exactly as written.",
+  });
+  return [
+    { role: "user", kind: "context.compaction", content: "Summary of our conversation so far:" },
+    { role: "assistant", content: text },
+    ...history.slice(latest),
+  ];
+};
+
+export default defineAgent({
+  model: "anthropic/claude-opus-5.5",
+  compaction: { threshold: 0.8 },
+  experimental: { compaction: keepLatestTurn },
+});
+```
+
+`ctx` carries what a strategy reads and the one model call it makes:
+
+- `ctx.call({ messages, model?, system?, tools?, providerOptions? })` calls a model and returns
+  `{ messages, text }`. eve sends exactly `messages`: it adds no recalled memory, client context or
+  announcements. `system` defaults to the agent's instructions, and `""` sends none. `tools` is
+  `"none"` by default, and `"inherit"` sends the turn's own tools, which the model can call but eve
+  never runs. `model` defaults to the turn's model. eve bills every call to the compaction's
+  summary run, and a request longer than the model's context window rejects with
+  `CompactionOverflowError`: catch it, drop part of what you sent, and call again.
+- `ctx.reason` is `"automatic"`, `"manual"` or `"overflow"`, and `ctx.event` is the session event eve
+  compacts at (`undefined` for a manual compaction).
+- `ctx.recompacting` is `true` when eve compacted this session during the previous model response
+  or the one before it, so the last rewrite did not leave room. `defaultCompaction()` keeps less of
+  the history verbatim each time it is `true`.
+- `ctx.model` is the session model: its `provider` and `modelId` as the AI SDK names them
+  (`"openai.responses"` is OpenAI's Responses API called directly, and a model routed through AI
+  Gateway reports `"gateway"`), and its `contextWindowTokens` and `maxOutputTokens`.
+- `ctx.tokens.limit` is the most history that fits the model's context window beside the
+  instructions, tools and recall. `ctx.tokens.threshold` and `ctx.tokens.target` are the history
+  sizes `compaction.threshold` allows and a compaction aims for. `ctx.tokens.estimate(messages)` is
+  the estimate eve checks results and triggers against.
+- Every user message carries a `kind`: `"user"` for what a person sent, and
+  a framework kind such as `"context.compaction"` for what eve or a strategy added. History is typed
+  `StoredHistoryMessage`, so a strategy reads `message.kind` without a cast.
+- Return `undefined` when nothing can be removed.
+
+eve checks each result before it applies it, for every strategy. A result fails the compaction, and
+leaves the history as it was, when it drops a tool call's result or a call, puts a checkpoint after
+other messages, or removes a user message's `kind`. An automatic result must also fit within
+`ctx.tokens.limit`, and a strategy that compacts what it already returned fails. What the model
+answers next is yours: keep the turn's latest user message, or carry it in the summary and add a
+message, such as an `"execution.continuation"`, that tells the model to go on. eve never falls back
+to its default when a strategy fails.
+
+`defaultCompaction({ model?, instructions? })` is eve's compaction when you set none: it caps
+oversized tool results in older history, and summarizes the older history when capping doesn't fit.
+Pass `model` to write the summary with another model, and `instructions` to add to eve's checkpoint
+prompt. Set `compaction.model` only when you don't set `experimental.compaction`: with both, eve
+rejects the agent and asks you to pass `defaultCompaction({ model })`. `compaction.threshold` and
+`compaction.modelContextWindowTokens` apply to every strategy.
+
+`openaiCompaction({ fallback? })` compacts with OpenAI's own compaction instead of a text summary.
+eve sends the turn's request with OpenAI's `compaction_trigger`, and OpenAI answers with an
+encrypted record of the history. eve stores that record as the history and sends it back on every
+later request, so the model keeps its working state where a summary would drop it. It needs the
+OpenAI Responses API called directly, with `openai("gpt-...")`. On any other model, and when the
+call fails, it compacts with `fallback`, which is `defaultCompaction()` unless you pass another
+strategy, and logs why.
+
+```ts title="agent/agent.ts"
+import { defineAgent } from "eve";
+import { openaiCompaction } from "eve/experimental/compaction";
+import { openai } from "eve/models/openai";
+
+export default defineAgent({
+  model: openai("gpt-5"),
+  experimental: { compaction: openaiCompaction() },
+});
+```
+
+The request leaves out the messages eve adds to every request (memory, instructions, state and the
+previous checkpoint), and eve adds them again after the compaction, because the record would hold
+stale copies of them. `withoutInjected(history)` from `eve/experimental/compaction` does that
+filtering for your own strategy. The first request after a compaction misses the prompt cache past
+the instructions and tools. Later requests hit it. The record is unreadable to other providers: a
+session that switches models after an OpenAI compaction logs a warning on each request and sends
+the history without the record.
+
+The agent's own `store` setting applies to the compaction call and to every later request. With the
+default, OpenAI keeps the record and eve refers to it by id, for as long as OpenAI keeps the
+response. With `modelOptions: { providerOptions: { openai: { store: false } } }`, eve sends the
+record inline with its encrypted content, so the session stays resumable after OpenAI's retention,
+as it does for the rest of the history. A turn compacts again when its tool results have grown the
+history past the threshold or past the window. The strategy declines only when nothing was added
+after the record.
+
+To choose when the strategy runs, pass `{ compact, when }`. `when` is a map keyed by the session
+event eve asks at. `"model.requested"` is once the turn's model is chosen and before its call
+starts. `"model.retried"` is when a failed attempt (a rate limit, a 503, an empty response) runs
+again in the same run, before the retried call. `"turn.settled"` is after the turn's answer and
+before the turn settles. An attempt that already published output starts a new run instead, which
+eve asks at `"model.requested"`. Each entry is `true`, which runs the strategy when the next
+request is over the threshold, or a function of the measure: `measure.inputTokens` (the next
+request's input), `measure.threshold`, `measure.contextWindowTokens`, and
+`measure.maxOutputTokens` (the model's output limit from AI Gateway's catalog, when known). An
+event with no entry doesn't run the strategy. Without `when`, eve asks at `"model.requested"`
+with `true`.
+
+```ts title="agent/agent.ts"
+experimental: {
+  compaction: {
+    compact: keepLatestTurn,
+    when: {
+      "model.requested": true,
+      // Compact between turns at 70% of the window, so a long task isn't interrupted mid-turn.
+      "turn.settled": ({ inputTokens, contextWindowTokens }) =>
+        contextWindowTokens !== undefined && inputTokens >= 0.7 * contextWindowTokens,
+    },
+  },
+},
+```
+
+A turn-end compaction that fails is logged and keeps the history; the turn's answer stands.
+Without `experimental.compaction`, a provider rejection fails the turn as before. With it, a compaction for `reason: "overflow"` runs whatever `when` says, after `model.retried` and before
+the retried call, so `ctx.event` is `"model.retried"`. A step that fails and runs again calls the
+strategy again. Give effects outside eve, such as archiving the removed turns, an idempotency key
+derived from what they write.
+
 ## Runtime limits
 
 `limits` sets eve's runtime caps. `sessionUsage` receives the session's usage

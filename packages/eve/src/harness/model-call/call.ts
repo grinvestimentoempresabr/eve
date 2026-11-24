@@ -29,9 +29,11 @@ import {
   EmptyModelResponseError,
   ModelStreamStalledError,
   rejectsCredential,
+  isContextOverflowError,
 } from "#harness/model-call/errors.js";
-import { type ModelProfile, resolveModelProfile } from "#harness/model-profile.js";
-import { awaitsProviderToolResult } from "#harness/provider-tool-history.js";
+import { holdsOpenAICompaction, OPENAI_DIRECT_PROVIDER } from "#harness/compaction/openai-item.js";
+import { modelIdentity, type ModelProfile, resolveModelProfile } from "#harness/model-profile.js";
+import { awaitsProviderToolResult } from "#shared/provider-tool-history.js";
 import { estimateRequestEnvelope } from "#harness/request-envelope.js";
 import { summarizeKnownError } from "#harness/semantic-errors/index.js";
 import { retryRun } from "#harness/session-machine/runs.js";
@@ -58,7 +60,7 @@ import type { StepResult } from "#harness/types.js";
 import { stepReference } from "#harness/step/context.js";
 import { agentSettings } from "#execution/effective-agent-config.js";
 import { createLogger, logError } from "#internal/logging.js";
-import { CompactionOverLimitError } from "#harness/compaction/over-limit-error.js";
+import { CompactionOverLimitError } from "#shared/compaction-over-limit-error.js";
 import { compactedTurnInput, historyBeforeCall } from "#harness/compaction/step.js";
 import { reportCompactionFailure, reportModelCallFailure } from "./failure.js";
 import { buildGatewayAttributionHeaders, withGatewayTraceContext } from "./model.js";
@@ -91,7 +93,7 @@ const MODEL_OUTPUT_TIMEOUT_MS = 10 * 60_000;
 export interface ModelCallOptions {
   readonly disabledProviderTools?: ReadonlySet<string>;
   readonly extraSystemNote?: string;
-  readonly retryReason?: "empty-response";
+  readonly retryReason?: "empty-response" | "context-overflow";
   readonly trailingUserNote?: string;
 }
 
@@ -118,6 +120,8 @@ export class ModelCaller {
   private system: string | readonly string[] = "";
   private unkeptUsage: Usage | undefined;
   private compactionFailure: { readonly error: unknown } | undefined;
+  private overflowPending = false;
+  private event: "model.requested" | "model.retried" = "model.requested";
   private attemptIndex = 0;
   private started: number | undefined;
   private acceptedOutput = false;
@@ -132,6 +136,13 @@ export class ModelCaller {
     this.input = input;
 
     this.profile = resolveModelProfile(input.model, stepReference(step).promptCache);
+    const { provider, modelId } = modelIdentity(input.model);
+    if (provider !== OPENAI_DIRECT_PROVIDER && holdsOpenAICompaction(prompt.messages)) {
+      log.warn(
+        `The history holds an OpenAI compaction record that ${provider} ${modelId} cannot read, so the request leaves it out and the model loses what it held. Switch back to the OpenAI Responses API, or compact again with a text strategy.`,
+        { sessionId: step.session.sessionId },
+      );
+    }
     this.attributionHeaders = buildGatewayAttributionHeaders(
       this.profile,
       step.config.runtimeIdentity,
@@ -171,6 +182,17 @@ export class ModelCaller {
           await this.prepareRetry(error);
           continue;
         }
+        if (
+          agentSettings(this.step).compactionStrategy !== undefined &&
+          options.retryReason !== "context-overflow" &&
+          !this.acceptedOutput &&
+          isContextOverflowError(error)
+        ) {
+          await this.prepareRetry(error);
+          options = { ...options, retryReason: "context-overflow" };
+          this.overflowPending = true;
+          continue;
+        }
         const recovery = recoverModelCall(error, options, diagnostics);
         if (recovery === undefined) throw error;
         await this.prepareRetry(error);
@@ -190,10 +212,12 @@ export class ModelCaller {
       await step.apply(discardAttempt(step.view(), { ending: "retried", runId, usage }));
       this.acceptedOutput = false;
       await this.input.newRun();
+      this.event = "model.requested";
       return;
     }
     if (attempt === undefined) return;
     await step.apply(retryRun({ attempt, error: modelCallErrorInfo(error), runId, usage }));
+    this.event = "model.retried";
   }
 
   async failIfCompactionFailed(): Promise<StepResult | undefined> {
@@ -298,12 +322,19 @@ export class ModelCaller {
         model: this.input.model,
         renew: this.input.renewCredential,
         promptMessages: withClientContext(prompt),
+        request: {
+          instructions: this.framing(options, this.request.nonSystemMessages).instructions,
+          tools,
+        },
         requestEnvelopeTokens: this.requestEnvelopeTokens,
+        event: this.event,
+        ...(this.overflowPending && { overflow: true as const }),
       });
     } catch (error) {
       this.compactionFailure = { error };
       throw error;
     }
+    this.overflowPending = false;
     if (compacted === undefined) return tools;
     compactPrompt(step, prompt, compacted);
     const turnInput = compactedTurnInput(prompt.messages);
