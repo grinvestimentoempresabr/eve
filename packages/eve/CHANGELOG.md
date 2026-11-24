@@ -1,5 +1,19 @@
 # eve
 
+## 1.5.0
+
+Released 2026-11-24 · [Compare with 1.4.0](https://github.com/vercel/eve/compare/eve%401.4.0...eve%401.5.0)
+
+### Features
+
+- `CallObservation` (`eve/events`) and `EveToolPart` (`eve/client` and framework bindings) now expose `parentCallId` for calls run inside another call, and the dev TUI, web chat registry, and framework UIs group nested calls under their parent call. ([#6799](https://github.com/vercel/eve/pull/6799))
+- `workflow({ mode: "execute", tools: true })` from `eve/tools/workflow` runs model-written JavaScript programs on the turn's tool catalog, letting programs call tools, connections, and agents with approvals, sign-ins, output schema validation, and crash-safe replay. ([#6789](https://github.com/vercel/eve/pull/6789))
+
+### Bug Fixes
+
+- The self-modification subagents, when no model is configured for them, now run on the parent's own provider model.
+  Before, a parent on `chatgpt()`, `mockModel()`, or a direct provider instance sent the subagent's model calls to AI Gateway under the parent's id. A dynamic subagent that names a model string, even one equal to the parent's id, still resolves through AI Gateway. ([#5990](https://github.com/vercel/eve/pull/5990))
+
 ## 1.4.0
 
 Released 2026-11-23 · [Compare with 1.3.0](https://github.com/vercel/eve/compare/eve%401.3.0...eve%401.4.0)
